@@ -1,4 +1,4 @@
-name: Build & Push (Matrix) to ECR
+name: Build & Push to ECR with Security Scanning
 
 on:
   push:
@@ -12,6 +12,7 @@ permissions:
   id-token: write
   contents: read
   packages: read
+  security-events: write
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
@@ -19,8 +20,68 @@ env:
   REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
 
 jobs:
-  docker-build-and-push:
+  # Job 1: SonarCloud code analysis
+  sonarcloud-analysis:
+    name: SonarCloud Analysis
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+      
+      - name: SonarCloud Scan
+        uses: sonarsource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # Job 2: Terraform provision ECR repositories
+  terraform-ecr:
+    name: Terraform ECR Provisioning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+      
+      - name: Terraform Format Check
+        working-directory: ./terraform
+        run: terraform fmt -check
+        continue-on-error: true
+      
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+      
+      - name: Terraform Validate
+        working-directory: ./terraform
+        run: terraform validate
+      
+      - name: Terraform Plan
+        working-directory: ./terraform
+        run: terraform plan -out=tfplan
+      
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        working-directory: ./terraform
+        run: terraform apply -auto-approve tfplan
+
+  # Job 3: Build, scan, and push Docker images
+  docker-build-and-push:
+    name: Build & Push - ${{ matrix.service.name }}
+    runs-on: ubuntu-latest
+    needs: [sonarcloud-analysis, terraform-ecr]
     strategy:
       fail-fast: false
       matrix:
@@ -37,23 +98,23 @@ jobs:
             context: ./frontend
             dockerfile: ./frontend/Dockerfile
             repo: ${{ vars.ECR_FRONTEND_REPO }}
-
+    
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
-
+      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
+      
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
-
+      
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
-
+      
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -64,27 +125,110 @@ jobs:
             type=ref,event=tag
             type=sha,format=short
             type=ref,event=branch
-
-      # If you need build args per service, add conditionals here.
-      # Example for backend only:
-      # - name: Set backend build args
-      #   if: matrix.service.name == 'backend'
-      #   run: echo "BUILD_ARGS=--build-arg NODE_ENV=production" >> $GITHUB_ENV
-
-      - name: Build and push
+            type=ref,event=pr
+      
+      - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.service.context }}
           file: ${{ matrix.service.dockerfile }}
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # secrets: |
-          #   "npm_token=${{ secrets.NPM_TOKEN }}"
-          # build-args: ${{ env.BUILD_ARGS }}
+      
+      - name: Get image name for scanning
+        id: image
+        run: |
+          IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
+          echo "tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image.outputs.tag }}
+          format: 'sarif'
+          output: 'trivy-results-${{ matrix.service.name }}.sarif'
+          severity: 'CRITICAL,HIGH'
+      
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results-${{ matrix.service.name }}.sarif'
+          category: 'trivy-${{ matrix.service.name }}'
+      
+      - name: Run Trivy vulnerability scanner (Table output)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image.outputs.tag }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+      
+      - name: Check Trivy scan results
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image.outputs.tag }}
+          format: 'json'
+          output: 'trivy-results-${{ matrix.service.name }}.json'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+        continue-on-error: true
+      
+      - name: Push Docker image to ECR
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+      
+      - name: Output pushed image tags
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "### 🚀 Pushed Image Tags" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Service: **${{ matrix.service.name }}**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      
+      - name: Upload Trivy JSON results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results-${{ matrix.service.name }}
+          path: trivy-results-${{ matrix.service.name }}.json
+          retention-days: 30
 
-      - name: Output image tags
-        if: ${{ github.event_name != 'pull_request' }}
-        run: echo "Pushed -> ${{ steps.meta.outputs.tags }}"
+  # Job 4: Summary report
+  pipeline-summary:
+    name: Pipeline Summary
+    runs-on: ubuntu-latest
+    needs: [sonarcloud-analysis, terraform-ecr, docker-build-and-push]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "### 🎉 CI/CD Pipeline Completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Jobs Status:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ SonarCloud Analysis: ${{ needs.sonarcloud-analysis.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Terraform ECR: ${{ needs.terraform-ecr.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Docker Build & Push: ${{ needs.docker-build-and-push.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Quick Links:" >> $GITHUB_STEP_SUMMARY
+          echo "- [SonarCloud Dashboard](https://sonarcloud.io/project/overview?id=${{ github.repository_owner }}_${{ github.event.repository.name }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [GitHub Security](https://github.com/${{ github.repository }}/security/code-scanning)" >> $GITHUB_STEP_SUMMARY
+          echo "- [ECR Console](https://us-east-1.console.aws.amazon.com/ecr/repositories?region=us-east-1)" >> $GITHUB_STEP_SUMMARY
