@@ -155,40 +155,29 @@ resource "aws_ecr_repository_policy" "github_access" {
 # Data source for current AWS account
 data "aws_caller_identity" "current" {}
 
-# Get default VPC
-data "aws_vpc" "default" {
-  default = true
+# Variables for VPC and AMI (hardcoded to avoid permission issues)
+variable "vpc_id" {
+  description = "VPC ID to use (leave empty to not specify VPC)"
+  type        = string
+  default     = ""
 }
 
-# Get default subnets
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
+variable "ami_id" {
+  description = "AMI ID to use for EC2 instance"
+  type        = string
+  default     = "ami-0e001c9271cf7f3b9"  # Ubuntu 22.04 LTS in us-east-1
 }
 
-# Get latest Ubuntu 22.04 LTS AMI
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"] # Canonical
-
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
+variable "subnet_id" {
+  description = "Subnet ID to launch instance in (leave empty for default)"
+  type        = string
+  default     = ""
 }
 
-# Security Group for EC2 instance
+# Security Group for EC2 instance (without VPC specification)
 resource "aws_security_group" "ec2_sg" {
   name        = "${var.project_name}-${var.environment}-ec2-sg"
   description = "Security group for food delivery EC2 instance"
-  vpc_id      = data.aws_vpc.default.id
 
   ingress {
     description = "SSH from anywhere"
@@ -296,9 +285,10 @@ resource "aws_iam_instance_profile" "ec2_profile" {
 
 # EC2 Instance
 resource "aws_instance" "app_server" {
-  ami                    = data.aws_ami.ubuntu.id
+  ami                    = var.ami_id
   instance_type          = var.instance_type
   key_name               = var.key_name != "" ? var.key_name : null
+  subnet_id              = var.subnet_id != "" ? var.subnet_id : null
   vpc_security_group_ids = [aws_security_group.ec2_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
