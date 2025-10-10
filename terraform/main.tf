@@ -124,6 +124,34 @@ resource "aws_ecr_lifecycle_policy" "repos_policy" {
   })
 }
 
+# Repository policy for GitHub OIDC role access
+resource "aws_ecr_repository_policy" "github_access" {
+  for_each   = aws_ecr_repository.repos
+  repository = each.value.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowGitHubOIDCPushPull"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${var.aws_account_id}:role/github-oidc-food-delivery-ecr"
+        }
+        Action = [
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload"
+        ]
+      }
+    ]
+  })
+}
+
 # Data source for current AWS account
 data "aws_caller_identity" "current" {}
 
@@ -197,6 +225,48 @@ resource "aws_security_group" "ec2_sg" {
       Name = "${var.project_name}-${var.environment}-ec2-sg"
     }
   )
+}
+
+# IAM role for EC2 instance
+resource "aws_iam_role" "ec2_role" {
+  name = "${var.project_name}-${var.environment}-ec2-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+# IAM policy for ECR access
+resource "aws_iam_role_policy" "ecr_policy" {
+  name = "${var.project_name}-${var.environment}-ecr-policy"
+  role = aws_iam_role.ec2_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }
 
 # Attach SSM policy for Session Manager access
