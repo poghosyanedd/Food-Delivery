@@ -10,7 +10,7 @@ terraform {
 
   # Configure your S3 backend - change the bucket name
   backend "s3" {
-    bucket         = "your-terraform-state-bucket"  # CHANGE THIS
+    bucket         = "ood-delivery-terraform-state"  # CHANGE THIS
     key            = "food-delivery/terraform.tfstate"
     region         = "us-east-1"
     encrypt        = true
