@@ -32,7 +32,6 @@
     src: nginx.conf.j2
     dest: /etc/nginx/sites-available/{{ app_name }}
     mode: '0644'
-    validate: 'nginx -t -c %s'
   notify: Reload Nginx
 
 - name: Enable Nginx site
@@ -42,14 +41,21 @@
     state: link
   notify: Reload Nginx
 
-- name: Ensure Nginx configuration is valid
+- name: Test Nginx configuration
   command: nginx -t
   register: nginx_test
   changed_when: false
+  failed_when: nginx_test.rc != 0
 
 - name: Display Nginx configuration test result
   debug:
     msg: "{{ nginx_test.stderr_lines }}"
+
+- name: Reload Nginx if configuration is valid
+  systemd:
+    name: nginx
+    state: reloaded
+  when: nginx_test.rc == 0
 
 - name: Allow Nginx through UFW
   ufw:
