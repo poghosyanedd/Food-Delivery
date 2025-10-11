@@ -71,14 +71,29 @@ jobs:
         working-directory: ./terraform
         run: terraform validate
       
-      - name: Generate SSH Key Pair
+      # - name: Generate SSH Key Pair
+      #   run: |
+      #     mkdir -p ~/.ssh
+      #     if [ ! -f ~/.ssh/id_rsa ]; then
+      #       ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" -C "github-actions"
+      #     fi
+      #     chmod 600 ~/.ssh/id_rsa
+      #     chmod 644 ~/.ssh/id_rsa.pub
+
+      - name: Setup SSH Keys
         run: |
           mkdir -p ~/.ssh
-          if [ ! -f ~/.ssh/id_rsa ]; then
-            ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" -C "github-actions"
-          fi
+          
+          # Use the EC2_SSH_PRIVATE_KEY secret
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          
+          # Generate public key from private key
+          ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub
           chmod 644 ~/.ssh/id_rsa.pub
+          
+          echo "✅ Public key that will be used:"
+          cat ~/.ssh/id_rsa.pub
       
       - name: Terraform Plan
         working-directory: ./terraform
