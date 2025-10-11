@@ -429,29 +429,32 @@ jobs:
           #!/bin/bash
           set -e
           
+          export DOCKER_BUILDKIT=1
+          export COMPOSE_DOCKER_CLI_BUILD=1
+          
           echo "📦 Logging into ECR..."
           aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${REGISTRY}
           
           echo "🔄 Pulling latest images from ECR..."
-          docker pull ${REGISTRY}/${ECR_BACKEND_REPO}:latest
-          docker pull ${REGISTRY}/${ECR_FRONTEND_REPO}:latest
-          docker pull ${REGISTRY}/${ECR_ADMIN_REPO}:latest
+          cd /opt/food-delivery
+          docker pull ${REGISTRY}/${ECR_BACKEND_REPO}:latest || echo "Backend image pull failed"
+          docker pull ${REGISTRY}/${ECR_FRONTEND_REPO}:latest || echo "Frontend image pull failed"
+          docker pull ${REGISTRY}/${ECR_ADMIN_REPO}:latest || echo "Admin image pull failed"
           
           echo "🛑 Stopping existing containers..."
-          cd /opt/food-delivery
-          docker-compose down || true
+          docker compose down || docker-compose down || true
           
           echo "🚀 Starting new containers..."
-          docker-compose up -d
+          docker compose up -d || docker-compose up -d
           
           echo "⏳ Waiting for containers to be healthy..."
-          sleep 15
+          sleep 20
           
           echo "🧹 Cleaning up old images..."
-          docker image prune -af || true
+          docker image prune -af --filter "until=24h" || true
           
           echo "✅ Deployment complete!"
-          docker-compose ps
+          docker compose ps || docker-compose ps
           DEPLOY_SCRIPT
           
           chmod +x deploy.sh
@@ -462,11 +465,11 @@ jobs:
           # Execute deployment
           ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$EC2_IP \
             "export AWS_REGION=$AWS_REGION && \
-             export REGISTRY=$REGISTRY && \
-             export ECR_BACKEND_REPO=$ECR_BACKEND_REPO && \
-             export ECR_FRONTEND_REPO=$ECR_FRONTEND_REPO && \
-             export ECR_ADMIN_REPO=$ECR_ADMIN_REPO && \
-             bash /tmp/deploy.sh"
+            export REGISTRY=$REGISTRY && \
+            export ECR_BACKEND_REPO=$ECR_BACKEND_REPO && \
+            export ECR_FRONTEND_REPO=$ECR_FRONTEND_REPO && \
+            export ECR_ADMIN_REPO=$ECR_ADMIN_REPO && \
+            bash /tmp/deploy.sh"
       
       - name: Verify deployment
         env:
