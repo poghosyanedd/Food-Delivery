@@ -89,10 +89,9 @@ resource "aws_key_pair" "deployer" {
 
 # EC2 Instance
 resource "aws_instance" "app_server" {
-  ami                    = var.ami_id
+  ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
-  key_name               = var.key_name != "" ? var.key_name : null
-  subnet_id              = var.subnet_id != "" ? var.subnet_id : null
+  key_name               = aws_key_pair.deployer.key_name
   vpc_security_group_ids = [aws_security_group.app_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
