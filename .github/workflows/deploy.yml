@@ -71,29 +71,21 @@ jobs:
         working-directory: ./terraform
         run: terraform validate
       
-      # - name: Generate SSH Key Pair
-      #   run: |
-      #     mkdir -p ~/.ssh
-      #     if [ ! -f ~/.ssh/id_rsa ]; then
-      #       ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" -C "github-actions"
-      #     fi
-      #     chmod 600 ~/.ssh/id_rsa
-      #     chmod 644 ~/.ssh/id_rsa.pub
-
-      - name: Setup SSH Keys
+      - name: Setup SSH Keys from Secret
         run: |
           mkdir -p ~/.ssh
           
-          # Use the EC2_SSH_PRIVATE_KEY secret
+          # Write private key from secret
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           
-          # Generate public key from private key
+          # Extract public key from private key
           ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub
           chmod 644 ~/.ssh/id_rsa.pub
           
-          echo "✅ Public key that will be used:"
-          cat ~/.ssh/id_rsa.pub
+          echo "✅ SSH Keys prepared"
+          echo "Public key fingerprint:"
+          ssh-keygen -lf ~/.ssh/id_rsa.pub
       
       - name: Terraform Plan
         working-directory: ./terraform
@@ -131,18 +123,13 @@ jobs:
           name: terraform-outputs
           path: terraform-outputs.json
       
-      - name: Save SSH Private Key
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        run: |
-          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/github_actions_key
-          chmod 600 ~/.ssh/github_actions_key
-      
-      - name: Upload SSH Key
+      - name: Upload SSH Private Key
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: ssh-key
-          path: ~/.ssh/github_actions_key
+          path: ~/.ssh/id_rsa
+          retention-days: 1
 
   # Job 3: Build, scan, and push Docker images
   docker-build-and-push:
@@ -312,17 +299,24 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
       
-      - name: Create SSH key file
+      - name: Download SSH Key
+        uses: actions/download-artifact@v4
+        with:
+          name: ssh-key
+          path: ~/.ssh
+
+      - name: Setup SSH Key
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           
           cat >> ~/.ssh/config <<EOF
           Host *
             StrictHostKeyChecking no
             UserKnownHostsFile=/dev/null
+            IdentityFile ~/.ssh/id_rsa
           EOF
+          
+          echo "✅ SSH key configured"
       
       - name: Download Terraform outputs
         uses: actions/download-artifact@v4
@@ -409,11 +403,16 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
       
-      - name: Create SSH key file
+      - name: Download SSH Key
+        uses: actions/download-artifact@v4
+        with:
+          name: ssh-key
+          path: ~/.ssh
+
+      - name: Setup SSH Key
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          echo "✅ SSH key configured"
       
       - name: Deploy application
         env:
