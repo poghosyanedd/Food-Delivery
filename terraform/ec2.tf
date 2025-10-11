@@ -85,6 +85,11 @@ resource "aws_key_pair" "deployer" {
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
+
+  # Ignore if key already exists
+  lifecycle {
+    ignore_changes = [key_name, public_key]
+  }
 }
 
 # EC2 Instance
