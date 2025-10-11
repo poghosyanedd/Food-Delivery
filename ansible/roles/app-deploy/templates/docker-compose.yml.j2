@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: {{ app_name }}-mongodb
+    restart: always
+    ports:
+      - "{{ mongodb_port }}:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-changeme123}
+    networks:
+      - {{ app_name }}-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: {{ ecr_registry }}/{{ ecr_backend_repo }}:latest
+    container_name: {{ app_name }}-backend
+    restart: always
+    ports:
+      - "{{ backend_port }}:4000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    volumes:
+      - backend_uploads:/app/uploads
+    networks:
+      - {{ app_name }}-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    image: {{ ecr_registry }}/{{ ecr_frontend_repo }}:latest
+    container_name: {{ app_name }}-frontend
+    restart: always
+    ports:
+      - "{{ frontend_port }}:5173"
+    environment:
+      - VITE_API_URL=http://{{ ansible_host }}/api
+    depends_on:
+      - backend
+    networks:
+      - {{ app_name }}-network
+
+  admin:
+    image: {{ ecr_registry }}/{{ ecr_admin_repo }}:latest
+    container_name: {{ app_name }}-admin
+    restart: always
+    ports:
+      - "{{ admin_port }}:5174"
+    environment:
+      - VITE_API_URL=http://{{ ansible_host }}/api
+    depends_on:
+      - backend
+    networks:
+      - {{ app_name }}-network
+
+volumes:
+  mongodb_data:
+    driver: local
+  backend_uploads:
+    driver: local
+
+networks:
+  {{ app_name }}-network:
+    driver: bridge

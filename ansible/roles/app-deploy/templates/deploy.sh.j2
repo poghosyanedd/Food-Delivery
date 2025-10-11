@@ -1,0 +1,45 @@
+#!/bin/bash
+# Deployment script for Food Delivery Application
+# This script pulls latest images from ECR and redeploys the application
+
+set -e
+
+APP_DIR="{{ app_dir }}"
+AWS_REGION="{{ aws_region }}"
+ECR_REGISTRY="{{ ecr_registry }}"
+
+cd $APP_DIR
+
+echo "================================================"
+echo "Food Delivery Application Deployment"
+echo "================================================"
+
+echo "📦 Logging into Amazon ECR..."
+aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+echo "🔄 Pulling latest images from ECR..."
+docker-compose pull
+
+echo "🛑 Stopping existing containers..."
+docker-compose down
+
+echo "🚀 Starting containers with latest images..."
+docker-compose up -d
+
+echo "⏳ Waiting for services to be healthy..."
+sleep 10
+
+echo "🔍 Checking container status..."
+docker-compose ps
+
+echo "================================================"
+echo "✅ Deployment Complete!"
+echo "================================================"
+echo ""
+echo "Access your application:"
+echo "  Frontend: http://{{ ansible_host }}"
+echo "  Backend:  http://{{ ansible_host }}/api"
+echo "  Admin:    http://{{ ansible_host }}/admin"
+echo ""
+echo "View logs: docker-compose logs -f"
+echo "================================================"

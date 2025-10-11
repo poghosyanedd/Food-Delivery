@@ -1,0 +1,22 @@
+#!/bin/bash
+# ECR Login Script - Automatically logs into Amazon ECR
+# This script uses the EC2 instance IAM role for authentication
+
+set -e
+
+AWS_REGION="{{ aws_region }}"
+AWS_ACCOUNT_ID="{{ aws_account_id }}"
+ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+echo "$(date): Logging into Amazon ECR..."
+
+# Get ECR login token and authenticate Docker
+aws ecr get-login-password --region ${AWS_REGION} | \
+  docker login --username AWS --password-stdin ${ECR_REGISTRY}
+
+if [ $? -eq 0 ]; then
+    echo "$(date): Successfully logged into ECR: ${ECR_REGISTRY}"
+else
+    echo "$(date): Failed to login to ECR"
+    exit 1
+fi

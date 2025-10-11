@@ -1,0 +1,42 @@
+---
+- name: Configure EC2 Instance for Food Delivery Application
+  hosts: web_servers
+  become: yes
+  gather_facts: yes
+
+  pre_tasks:
+    - name: Wait for system to become reachable
+      wait_for_connection:
+        timeout: 300
+        delay: 5
+
+    - name: Gather facts after connection
+      setup:
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+  roles:
+    - docker
+    - nginx
+    - aws-ecr
+    - app-deploy
+
+  post_tasks:
+    - name: Display deployment information
+      debug:
+        msg:
+          - "================================================"
+          - "EC2 Configuration Complete!"
+          - "================================================"
+          - "Server IP: {{ ansible_host }}"
+          - "Docker installed: ✅"
+          - "Nginx configured: ✅"
+          - "ECR configured: ✅"
+          - "Application ready: ✅"
+          - "================================================"
+          - "Application will be deployed automatically"
+          - "by the GitHub Actions pipeline"
+          - "================================================"

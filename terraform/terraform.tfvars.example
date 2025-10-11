@@ -1,0 +1,17 @@
+# AWS Configuration
+aws_region     = "us-east-1"
+aws_account_id = "123456789012"  # CHANGE THIS
+
+# Project Configuration
+project_name = "food-delivery"
+environment  = "production"
+
+# EC2 Configuration
+instance_type = "t3.medium"
+
+# SSH Configuration
+# Generate with: ssh-keygen -t rsa -b 4096 -f ~/.ssh/food-delivery-key
+ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACA... your-public-key-here"
+
+# Security Configuration
+allowed_ssh_cidrs = ["0.0.0.0/0"]  # CHANGE THIS to your IP in production: ["YOUR_IP/32"]

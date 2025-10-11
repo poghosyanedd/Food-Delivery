@@ -1,0 +1,71 @@
+---
+- name: Ensure application directory exists
+  file:
+    path: "{{ app_dir }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0755'
+
+- name: Create .env file for backend
+  template:
+    src: backend.env.j2
+    dest: "{{ app_dir }}/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0600'
+
+- name: Create docker-compose.yml for ECR deployment
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ app_dir }}/docker-compose.yml"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0644'
+
+- name: Create .dockerignore file
+  copy:
+    dest: "{{ app_dir }}/.dockerignore"
+    content: |
+      node_modules
+      npm-debug.log
+      .git
+      .gitignore
+      README.md
+      .env
+      .DS_Store
+      dist
+      build
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0644'
+
+- name: Set ownership of application directory
+  file:
+    path: "{{ app_dir }}"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    recurse: yes
+
+- name: Create deployment script
+  template:
+    src: deploy.sh.j2
+    dest: "{{ app_dir }}/deploy.sh"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0755'
+
+- name: Display deployment information
+  debug:
+    msg:
+      - "Application deployment setup complete!"
+      - "Location: {{ app_dir }}"
+      - ""
+      - "Docker Compose file created with ECR images"
+      - "Environment file created"
+      - "Deployment script ready"
+      - ""
+      - "The GitHub Actions pipeline will:"
+      - "1. Pull images from ECR"
+      - "2. Deploy using docker-compose"
+      - "3. Verify the deployment"

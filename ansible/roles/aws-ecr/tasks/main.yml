@@ -1,0 +1,114 @@
+---
+- name: Install AWS CLI
+  apt:
+    name:
+      - awscli
+      - unzip
+    state: present
+
+- name: Check if AWS CLI v2 is installed
+  command: aws --version
+  register: aws_cli_version
+  changed_when: false
+  failed_when: false
+
+- name: Download AWS CLI v2
+  get_url:
+    url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+    dest: /tmp/awscliv2.zip
+    mode: '0644'
+  when: "'aws-cli/2' not in aws_cli_version.stdout"
+
+- name: Unzip AWS CLI v2
+  unarchive:
+    src: /tmp/awscliv2.zip
+    dest: /tmp/
+    remote_src: yes
+  when: "'aws-cli/2' not in aws_cli_version.stdout"
+
+- name: Install AWS CLI v2
+  command: /tmp/aws/install --update
+  when: "'aws-cli/2' not in aws_cli_version.stdout"
+
+- name: Clean up AWS CLI installation files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/awscliv2.zip
+    - /tmp/aws
+  when: "'aws-cli/2' not in aws_cli_version.stdout"
+
+- name: Verify AWS CLI installation
+  command: aws --version
+  register: aws_cli_final_version
+  changed_when: false
+
+- name: Display AWS CLI version
+  debug:
+    msg: "{{ aws_cli_final_version.stdout }}"
+
+- name: Create ECR login helper script
+  template:
+    src: ecr-login.sh.j2
+    dest: /usr/local/bin/ecr-login.sh
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Create systemd service for ECR login
+  copy:
+    dest: /etc/systemd/system/ecr-login.service
+    content: |
+      [Unit]
+      Description=Login to Amazon ECR
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/ecr-login.sh
+      User=root
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: '0644'
+
+- name: Create systemd timer for ECR login
+  copy:
+    dest: /etc/systemd/system/ecr-login.timer
+    content: |
+      [Unit]
+      Description=Refresh ECR login token every 10 hours
+      Requires=ecr-login.service
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=10h
+      Unit=ecr-login.service
+
+      [Install]
+      WantedBy=timers.target
+    mode: '0644'
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+
+- name: Enable and start ECR login timer
+  systemd:
+    name: ecr-login.timer
+    enabled: yes
+    state: started
+
+- name: Test AWS CLI access (will use EC2 instance role)
+  command: aws sts get-caller-identity
+  register: aws_identity
+  changed_when: false
+  become_user: "{{ app_user }}"
+  environment:
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+
+- name: Display AWS identity
+  debug:
+    msg: "{{ aws_identity.stdout }}"

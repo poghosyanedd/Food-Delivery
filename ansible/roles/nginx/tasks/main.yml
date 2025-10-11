@@ -1,0 +1,59 @@
+---
+- name: Install Nginx
+  apt:
+    name: nginx
+    state: present
+    update_cache: yes
+
+- name: Ensure Nginx service is started and enabled
+  systemd:
+    name: nginx
+    state: started
+    enabled: yes
+
+- name: Remove default Nginx site
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/nginx/sites-enabled/default
+    - /etc/nginx/sites-available/default
+  when: nginx_remove_default_site
+  notify: Reload Nginx
+
+- name: Create Nginx log directory
+  file:
+    path: /var/log/nginx
+    state: directory
+    mode: '0755'
+
+- name: Deploy Nginx configuration
+  template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/sites-available/{{ app_name }}
+    mode: '0644'
+    validate: 'nginx -t -c %s'
+  notify: Reload Nginx
+
+- name: Enable Nginx site
+  file:
+    src: /etc/nginx/sites-available/{{ app_name }}
+    dest: /etc/nginx/sites-enabled/{{ app_name }}
+    state: link
+  notify: Reload Nginx
+
+- name: Ensure Nginx configuration is valid
+  command: nginx -t
+  register: nginx_test
+  changed_when: false
+
+- name: Display Nginx configuration test result
+  debug:
+    msg: "{{ nginx_test.stderr_lines }}"
+
+- name: Allow Nginx through UFW
+  ufw:
+    rule: allow
+    name: 'Nginx Full'
+  when: ansible_os_family == "Debian"
+  ignore_errors: yes
