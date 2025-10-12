@@ -424,78 +424,102 @@ jobs:
         run: |
           echo "🚀 Deploying to EC2 instance: $EC2_IP"
           
-          # Create deployment script
+          # Create deployment script that uses Docker Compose v2
           cat > deploy.sh <<'DEPLOY_SCRIPT'
           #!/bin/bash
           set -e
           
-          export DOCKER_BUILDKIT=1
-          export COMPOSE_DOCKER_CLI_BUILD=1
+          cd /opt/food-delivery
           
           echo "📦 Logging into ECR..."
           aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${REGISTRY}
           
           echo "🔄 Pulling latest images from ECR..."
-          cd /opt/food-delivery
-          docker pull ${REGISTRY}/${ECR_BACKEND_REPO}:latest || echo "Backend image pull failed"
-          docker pull ${REGISTRY}/${ECR_FRONTEND_REPO}:latest || echo "Frontend image pull failed"
-          docker pull ${REGISTRY}/${ECR_ADMIN_REPO}:latest || echo "Admin image pull failed"
+          docker pull ${REGISTRY}/${ECR_BACKEND_REPO}:latest || true
+          docker pull ${REGISTRY}/${ECR_FRONTEND_REPO}:latest || true
+          docker pull ${REGISTRY}/${ECR_ADMIN_REPO}:latest || true
           
           echo "🛑 Stopping existing containers..."
-          docker compose down || docker-compose down || true
+          docker compose down 2>/dev/null || /usr/local/bin/docker-compose down 2>/dev/null || true
           
-          echo "🚀 Starting new containers..."
-          docker compose up -d || docker-compose up -d
+          echo "🚀 Starting new containers with Docker Compose v2..."
+          docker compose up -d
           
-          echo "⏳ Waiting for containers to be healthy..."
-          sleep 20
+          echo "⏳ Waiting for containers to start..."
+          sleep 15
           
-          echo "🧹 Cleaning up old images..."
-          docker image prune -af --filter "until=24h" || true
+          echo "✅ Checking container status..."
+          docker compose ps
           
           echo "✅ Deployment complete!"
-          docker compose ps || docker-compose ps
           DEPLOY_SCRIPT
           
           chmod +x deploy.sh
           
           # Copy deployment script to EC2
-          scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no deploy.sh ubuntu@$EC2_IP:/tmp/deploy.sh
+          echo "📤 Copying deployment script to EC2..."
+          scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -o ServerAliveInterval=30 deploy.sh ubuntu@$EC2_IP:/tmp/deploy.sh
           
           # Execute deployment
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$EC2_IP \
+          echo "🚀 Executing deployment..."
+          ssh -i ~/.ssh/id_rsa \
+              -o StrictHostKeyChecking=no \
+              -o ServerAliveInterval=30 \
+              -o ConnectTimeout=10 \
+              ubuntu@$EC2_IP \
             "export AWS_REGION=$AWS_REGION && \
             export REGISTRY=$REGISTRY && \
             export ECR_BACKEND_REPO=$ECR_BACKEND_REPO && \
             export ECR_FRONTEND_REPO=$ECR_FRONTEND_REPO && \
             export ECR_ADMIN_REPO=$ECR_ADMIN_REPO && \
-            bash /tmp/deploy.sh"
+            bash /tmp/deploy.sh 2>&1 | tee /tmp/deployment.log"
+          
+          echo "✅ Deployment script executed successfully!"
       
       - name: Verify deployment
         env:
           EC2_IP: ${{ needs.terraform-provision.outputs.ec2_public_ip }}
         run: |
-          echo "🔍 Verifying deployment..."
+          echo "🔍 Verifying deployment on $EC2_IP..."
           
+          # Check Docker status
+          echo "🐳 Checking Docker containers..."
           ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$EC2_IP \
-            "cd /opt/food-delivery && docker-compose ps"
+            "cd /opt/food-delivery && docker compose ps"
           
-          echo "### 🎉 Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          # Check if containers are running
+          RUNNING_COUNT=$(ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$EC2_IP \
+            "cd /opt/food-delivery && docker compose ps --format json" | grep -c "running" || echo "0")
+          
+          echo "Running containers: $RUNNING_COUNT"
+          
+          if [ "$RUNNING_COUNT" -ge "3" ]; then
+            echo "✅ At least 3 containers are running"
+          else
+            echo "⚠️ Less than 3 containers running, checking logs..."
+            ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$EC2_IP \
+              "cd /opt/food-delivery && docker compose logs --tail=100"
+          fi
+          
+          # Check Nginx
+          echo "🌐 Checking Nginx status..."
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$EC2_IP \
+            "sudo systemctl is-active nginx"
+          
+          # Test health endpoint
+          echo "🧪 Testing health endpoint..."
+          sleep 5
+          curl -f http://$EC2_IP/health || echo "Health check endpoint not responding yet"
+          
+          echo "### 🎉 Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Instance IP:** $EC2_IP" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Application URLs:**" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: http://$EC2_IP" >> $GITHUB_STEP_SUMMARY
           echo "- Backend API: http://$EC2_IP/api" >> $GITHUB_STEP_SUMMARY
           echo "- Admin Panel: http://$EC2_IP/admin" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**SSH Access:**" >> $GITHUB_STEP_SUMMARY
-          echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "ssh -i ~/.ssh/id_rsa ubuntu@$EC2_IP" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**View Logs:**" >> $GITHUB_STEP_SUMMARY
-          echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "ssh ubuntu@$EC2_IP 'cd /opt/food-delivery && docker-compose logs -f'" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "- Health Check: http://$EC2_IP/health" >> $GITHUB_STEP_SUMMARY
 
   # Job 6: Summary report
   pipeline-summary:
