@@ -1,12 +1,12 @@
 server {
     listen 80;
-    server_name {{ nginx_server_name }};
+    server_name _;
 
     client_max_body_size 100M;
 
-    # Frontend
+    # Frontend - serve from root
     location / {
-        proxy_pass http://localhost:{{ frontend_port }};
+        proxy_pass http://localhost:5173;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -16,15 +16,14 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         
-        # Timeouts
         proxy_connect_timeout 60s;
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
     }
 
-    # Backend API
+    # Backend API - must be before / location
     location /api {
-        proxy_pass http://localhost:{{ backend_port }};
+        proxy_pass http://localhost:4000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -34,15 +33,18 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         
-        # Timeouts
         proxy_connect_timeout 60s;
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
     }
 
-    # Admin Panel
+    # Admin Panel - serve as separate app
     location /admin {
-        proxy_pass http://localhost:{{ admin_port }};
+        # Remove /admin prefix when proxying
+        rewrite ^/admin(/.*)$ $1 break;
+        rewrite ^/admin$ / break;
+        
+        proxy_pass http://localhost:5174;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -52,23 +54,27 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         
-        # Timeouts
         proxy_connect_timeout 60s;
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
     }
 
-    # Static files and uploads
-    location /images {
-        proxy_pass http://localhost:{{ backend_port }}/images;
+    # Admin static assets
+    location ~* ^/admin/(assets|static)/ {
+        rewrite ^/admin(/.*)$ $1 break;
+        proxy_pass http://localhost:5174;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # Health check endpoint
+    # Images/uploads from backend
+    location /images {
+        proxy_pass http://localhost:4000/images;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    # Health check
     location /health {
         access_log off;
         return 200 "healthy\n";
@@ -76,14 +82,13 @@ server {
     }
 
     # Logging
-    access_log /var/log/nginx/{{ app_name }}-access.log;
-    error_log /var/log/nginx/{{ app_name }}-error.log;
+    access_log /var/log/nginx/food-delivery-access.log;
+    error_log /var/log/nginx/food-delivery-error.log;
 
     # Security headers
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
-    add_header Referrer-Policy "no-referrer-when-downgrade" always;
 
     # Gzip compression
     gzip on;
@@ -91,15 +96,5 @@ server {
     gzip_min_length 1024;
     gzip_proxied any;
     gzip_comp_level 6;
-    gzip_types
-        text/plain
-        text/css
-        text/xml
-        text/javascript
-        application/json
-        application/javascript
-        application/xml+rss
-        application/rss+xml
-        application/atom+xml
-        image/svg+xml;
+    gzip_types text/plain text/css text/xml text/javascript application/json application/javascript application/xml+rss;
 }

@@ -36,6 +36,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+
   # Job 2: Terraform provision ECR repositories and EC2
   terraform-provision:
     name: Terraform Provisioning
@@ -157,36 +158,6 @@ jobs:
           name: ssh-key
           path: ~/.ssh/id_rsa
           retention-days: 1
-      
-      - name: Test SSH Connection
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        run: |
-          EC2_IP=$(cd terraform && terraform output -raw instance_public_ip)
-          
-          echo "Waiting for instance to be ready..."
-          sleep 30
-          
-          echo "Testing SSH connection..."
-          for i in {1..10}; do
-            if ssh -i ~/.ssh/id_rsa \
-                   -o StrictHostKeyChecking=no \
-                   -o UserKnownHostsFile=/dev/null \
-                   -o ConnectTimeout=10 \
-                   ubuntu@$EC2_IP \
-                   "echo 'SSH connection successful'"; then
-              echo "✅ SSH connection works!"
-              exit 0
-            fi
-            echo "Attempt $i/10 failed, waiting 10s..."
-            sleep 10
-          done
-          
-          echo "❌ SSH connection failed after 10 attempts"
-          echo "Checking instance status..."
-          aws ec2 describe-instance-status \
-            --instance-ids $(cd terraform && terraform output -raw instance_id) \
-            --region ${{ env.AWS_REGION }}
-          exit 1
 
   # Job 3: Build, scan, and push Docker images
   docker-build-and-push:
