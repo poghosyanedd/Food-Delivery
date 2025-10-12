@@ -74,6 +74,7 @@ jobs:
       - name: Setup SSH Keys from Secret
         run: |
           mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
           
           # Write private key from secret
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
@@ -83,22 +84,45 @@ jobs:
           ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub
           chmod 644 ~/.ssh/id_rsa.pub
           
+          # Verify key format
           echo "✅ SSH Keys prepared"
-          echo "Public key fingerprint:"
-          ssh-keygen -lf ~/.ssh/id_rsa.pub
+          echo "Private key type:"
+          head -1 ~/.ssh/id_rsa
+          echo ""
+          echo "Public key:"
+          cat ~/.ssh/id_rsa.pub
+          echo ""
+          echo "Public key fingerprint (MD5):"
+          ssh-keygen -lf ~/.ssh/id_rsa.pub -E md5
+          echo ""
+          echo "Public key fingerprint (SHA256):"
+          ssh-keygen -lf ~/.ssh/id_rsa.pub -E sha256
       
       - name: Terraform Plan
         working-directory: ./terraform
         run: |
+          PUBLIC_KEY=$(cat ~/.ssh/id_rsa.pub)
+          echo "Using public key: $PUBLIC_KEY"
+          
           terraform plan \
             -var="aws_account_id=${{ env.AWS_ACCOUNT_ID }}" \
-            -var="ssh_public_key=$(cat ~/.ssh/id_rsa.pub)" \
+            -var="ssh_public_key=$PUBLIC_KEY" \
             -out=tfplan
       
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         working-directory: ./terraform
         run: terraform apply -auto-approve tfplan
+      
+      - name: Verify Key Pair in AWS
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          echo "Checking key pair in AWS..."
+          aws ec2 describe-key-pairs \
+            --key-names food-delivery-key \
+            --region ${{ env.AWS_REGION }} \
+            --query 'KeyPairs[0].[KeyName,KeyFingerprint,KeyType]' \
+            --output table
       
       - name: Get Terraform Outputs
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -107,8 +131,11 @@ jobs:
         run: |
           EC2_IP=$(terraform output -raw instance_public_ip)
           echo "ec2_ip=$EC2_IP" >> $GITHUB_OUTPUT
+          
           echo "### 🖥️ Infrastructure Provisioned" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "**EC2 Public IP:** $EC2_IP" >> $GITHUB_STEP_SUMMARY
+          echo "**SSH Command:** \`ssh -i ~/.ssh/food-delivery-new ubuntu@$EC2_IP\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
       
       - name: Save Terraform outputs
@@ -130,6 +157,36 @@ jobs:
           name: ssh-key
           path: ~/.ssh/id_rsa
           retention-days: 1
+      
+      - name: Test SSH Connection
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          EC2_IP=$(cd terraform && terraform output -raw instance_public_ip)
+          
+          echo "Waiting for instance to be ready..."
+          sleep 30
+          
+          echo "Testing SSH connection..."
+          for i in {1..10}; do
+            if ssh -i ~/.ssh/id_rsa \
+                   -o StrictHostKeyChecking=no \
+                   -o UserKnownHostsFile=/dev/null \
+                   -o ConnectTimeout=10 \
+                   ubuntu@$EC2_IP \
+                   "echo 'SSH connection successful'"; then
+              echo "✅ SSH connection works!"
+              exit 0
+            fi
+            echo "Attempt $i/10 failed, waiting 10s..."
+            sleep 10
+          done
+          
+          echo "❌ SSH connection failed after 10 attempts"
+          echo "Checking instance status..."
+          aws ec2 describe-instance-status \
+            --instance-ids $(cd terraform && terraform output -raw instance_id) \
+            --region ${{ env.AWS_REGION }}
+          exit 1
 
   # Job 3: Build, scan, and push Docker images
   docker-build-and-push:
